@@ -1,0 +1,466 @@
+
+import pandas as pd
+import numpy as np # for linear algebra
+import math # for math operations
+
+import seaborn as sns # for plotting
+
+# handling files
+import os
+import sys
+
+# data preprocessing
+from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import train_test_split
+
+
+# Model Building and Fitting
+from sklearn.ensemble import RandomForestClassifier
+from prophet import Prophet
+
+
+# Model Evaluation and Tuning
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+
+# visualization libraries
+import seaborn as sns
+import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt # for plotting
+#import squarify # for tree maps
+
+#load DATA
+df = pd.read_csv("/kaggle/input/dataco-smart-supply-chain-for-big-data-analysis/DataCoSupplyChainDataset.csv", encoding="ISO-8859-1")
+df.head(5)
+
+  # retrieve the number of columns and rows
+df.describe()
+  # drop irrelevant columns
+def drop_columns(df, columns_to_drop):
+    try:
+        df = df.drop(columns=columns_to_drop)
+        print(f"{len(columns_to_drop)} columns dropped successfully. Number of columns remaining: {len(df.columns)}")
+        return df
+    except KeyError as e:
+        print(f"""Column(s): {e} not found in dataframe.
+
+            No columns dropped.
+            Please Check that the column names are correct.""")
+        return df
+
+# Specify the columns to keep
+colums_to_keep = ['Days for shipping (real)',
+                  'Days for shipment (scheduled)',
+                  'Customer Country',
+                  'Sales per customer',
+                  'Delivery Status',
+                  'Late_delivery_risk',
+                  'Customer City',
+                  'Customer Segment',
+                  'Sales','Shipping Mode',
+                  'Type', 'Product Card Id',
+                  'Customer Zipcode',
+                  'Product Category Id',
+                  'Product Name',
+                  'Product Price',
+                  'Market',
+                  'Product Status',
+                  'shipping date (DateOrders)',]
+
+# Specify the columns to drop
+columns_to_drop = [col for col in df.columns if col not in colums_to_keep ]
+
+df = drop_columns(df, columns_to_drop)
+
+  # drop customer Zip code.
+df = df.drop(columns=['Customer Zipcode'])
+  ### Check for Missing values
+def check_null_values(df):
+    null_values = df.isnull().sum()
+    if null_values.sum() == 0:
+        print("No null values found ✅")
+    else:
+        print("⚠️ Null values found in the following columns:")
+        for column, null_count in null_values.iteritems():
+            if null_count > 0:
+                print(f"{column}: {null_count}")
+
+# Use the function
+check_null_values(df)
+  # Create month, Year, Day, and Weekday columns from Shipping Date
+def extract_date_parts(df, date_column, prefix):
+    try:
+        df[date_column] = pd.to_datetime(df[date_column])
+        df[f'{prefix} Year'] = df[date_column].dt.year
+        df[f'{prefix} Month'] = df[date_column].dt.month
+        df[f'{prefix} Day'] = df[date_column].dt.day
+        df[f'{prefix} Weekday'] = df[date_column].dt.weekday
+        # verify and notify that the columns have been created
+        if f'{prefix} Year' in df.columns and f'{prefix} Month' in df.columns and f'{prefix} Day' in df.columns and f'{prefix} Weekday' in df.columns:
+            print(f"✅ Success! Columns Created: {prefix} Year, {prefix} Month, {prefix} Day, and {prefix} Weekday")
+            return df
+        else:
+            print("Error creating columns. Please check that the date column name is correct.")
+    except Exception as e:
+        print(f"Error creating columns: {e}")
+        return df
+# Add Lead Time Feature from Days for shipping (real) and Days for shipment (scheduled)
+df['Lead Time'] = df['Days for shipping (real)'] - df['Days for shipment (scheduled)']
+
+# Use the function to extract date parts
+df = extract_date_parts(df, 'shipping date (DateOrders)', 'Shipping')
+# display the shape of the data frame
+df.shape
+# Select top selling product
+top_product = df['Product Card Id'].value_counts().index[0]
+# get top product ID
+print(f"Filtering and Encoding Dataset for Top Product ID: {top_product}")
+
+from sklearn.preprocessing import LabelEncoder
+
+def prepare_data(df, product_card_id, categorical_cols, columns_to_drop):
+    """
+    Prepare a DataFrame for bivariate analysis and machine learnin
+    g by applying label encoding and one-hot encoding to categorical
+    columns and dropping specified columns.
+
+    Parameters:
+    df (pandas.DataFrame): The original DataFrame.
+    product_card_id (int): The product card ID to filter the DataFrame on.
+    categorical_cols (list of str): The names of the categorical columns to apply encoding to.
+    columns_to_drop (list of str): The names of the columns to drop from the DataFrame.
+
+    Returns:
+    pandas.DataFrame: The label encoded DataFrame for bivariate analysis.
+    pandas.DataFrame: The one-hot encoded DataFrame for machine learning.
+    """
+    try:
+        df_copy = df[df['Product Card Id'] == product_card_id].copy()  # create a copy
+
+        # label encoding
+        label_encoder = LabelEncoder()
+        df_label_encoded = df_copy.copy()
+
+        # Apply label encoding to categorical variables in place
+        for col in categorical_cols:
+            df_label_encoded[col] = label_encoder.fit_transform(df_label_encoded[col])
+
+        # Drop specified columns
+        df_label_encoded = df_label_encoded.drop(columns=columns_to_drop)
+
+        # one-hot encoding
+        df_one_hot_encoded = pd.get_dummies(df_copy, columns=categorical_cols)
+
+        # Drop specified columns
+        df_one_hot_encoded = df_one_hot_encoded.drop(columns=columns_to_drop)
+        print("Data Encoding successful. ✅")
+        return  df_one_hot_encoded, df_label_encoded
+    except Exception as e:
+        print(f"Error preparing data: {e}")
+        return None, None
+
+# Use the function to prepare the data for bivariate analysis
+categorical_cols = ['Type', 'Customer Segment',
+                    'Delivery Status',
+                    'Customer City',
+                    'Market',
+                    'Shipping Mode']
+
+columns_to_drop = ['Product Name',
+                   'Days for shipment (scheduled)',
+                   'Sales per customer',
+                   'Days for shipping (real)',
+                   'Customer Country',
+                   'shipping date (DateOrders)',
+                   'Product Card Id',
+                   'Product Category Id',
+                   'Product Status',
+                   'Product Price']
+
+# drop columns and encode data for correlation martrix and Machine learning
+onehot_encode_df, label_encode_df = prepare_data(df, top_product, categorical_cols, columns_to_drop)
+
+# rename Type column to Payment Type
+label_encode_df = label_encode_df.rename(columns={'Type': 'Payment Type'})
+onehot_encode_df = onehot_encode_df.rename(columns={'Type': 'Payment Type'})
+  fig, axes = plt.subplots(nrows=3, ncols=3, figsize=(15, 15))
+fig.suptitle('Distribution Plots for Selected Variables',
+             fontsize=16)
+# Create a copy of the DataFrame
+df_copy = df.copy()
+
+
+# Plotting  the top ten products per Product Card Id
+sns.countplot(data=df_copy, x='Product Card Id',
+                color='blue', ax=axes[0, 0],
+                order=df_copy['Product Card Id'].value_counts().iloc[:10].index)
+axes[0, 0].set_title('Distribution of Top Ten Product Id')
+axes[0, 0].set_xlabel('Product Card Id')
+axes[0, 0].set_ylabel('Count')
+
+
+# Plotting Value of sales in  dollars
+sns.histplot(data=df_copy, x='Sales',
+             kde=True, color='salmon',
+             bins=30, linewidth=2,
+             ax=axes[0, 1])
+axes[0, 1].set_title('Distribution of Sales')
+axes[0, 1].set_xlabel('Sales value in Dollars')
+axes[0, 1].set_ylabel('Frequency')
+
+
+# Plotting Sales Value per customer
+sns.histplot(data=df_copy, x='Sales per customer',
+             bins=30, kde=True, linewidth=2,
+             color='lightblue', ax=axes[0, 2])
+axes[0, 2].set_title('Distribution of Sales per Customer')
+axes[0, 2].set_xlabel('Sales per Customer')
+axes[0, 2].set_ylabel('Frequency')
+
+# Ploting the distribution of Product Price
+sns.histplot(data=df_copy, x='Product Price', bins=30, kde=True,
+             color='lightgreen', linewidth=2, ax=axes[1, 0])
+
+axes[1, 0].set_title('Distribution of Product Price')
+axes[1, 0].set_xlabel('Product Price')
+
+# ploting a tree map for Customer Segment
+squarify.plot(sizes=df_copy['Customer Segment'].value_counts(),
+              label=df_copy['Customer Segment'].value_counts().index,
+              color=sns.color_palette("Set3"), ax=axes[1, 1])
+axes[1, 1].set_title('Distribution of Customer Segment - Treemap')
+
+# ploting a tree map for Top Ten Product Category Id
+squarify.plot(sizes=df_copy['Product Category Id'].value_counts().iloc[:10],
+                label=df_copy['Product Category Id'].value_counts().iloc[:10].index,
+                color=sns.color_palette("Set2"), ax=axes[1, 2])
+axes[1, 2].set_title('Distribution of Top Ten Product Category Id - Treemap')
+
+# Plotting the distribution of Delivery Status
+sns.countplot(data=df_copy, x='Delivery Status',
+                color='pink', ax=axes[2, 0])
+axes[2, 0].set_title('Distribution of Delivery Status')
+axes[2, 0].set_xlabel('Delivery Status')
+axes[2, 0].set_ylabel('Count')
+
+
+# Plotting the distribution Payment Type with stacked bar chart
+df_copy.groupby(['Type'])['Type'].count().plot(kind='bar',
+                                               stacked=True,
+                                               ax=axes[2, 1])
+
+axes[2, 1].set_title('Distribution of Payment Type')
+axes[2, 1].set_xlabel('Payment Type')
+axes[2, 1].set_ylabel('Count')
+
+# Plotting the Distribution of top ten Customer Country
+sns.countplot(data=df_copy, x='Customer Country',
+                color='orange', ax=axes[2, 2],
+                order=df_copy['Customer Country'].value_counts().iloc[:10].index)
+axes[2, 2].set_title('Distribution of Customer Country')
+axes[2, 2].set_xlabel('Customer Country')
+axes[2, 2].set_ylabel('Count')
+
+
+
+# Adjust layout
+plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+# Show the plots
+plt.show()
+#| code-fold: true
+#| code-summary: "Show the code"
+import seaborn as sns
+import matplotlib.pyplot as plt
+import calendar
+
+# Extract shipping date (DateOrders) and Sales columns
+df_heatmap = df[['shipping date (DateOrders)', 'Sales']]
+# Assuming 'df' is your original dataframe
+
+df_heatmap.set_index('shipping date (DateOrders)', inplace=True)
+resampled_df = df_heatmap.resample('M').sum()  # Resample to yearly frequency
+# Set x-axis ticks to represent months and years
+month_labels = [calendar.month_abbr[m.month] + '-' + str(m.year) for m in resampled_df.index]
+# Plot the heatmap
+plt.figure(figsize=(20, 10))
+sns.heatmap(resampled_df.T, cmap='YlGnBu', cbar_kws={'label': 'Sales'})
+plt.xticks(ticks=range(len(month_labels)), labels=month_labels, rotation=80, ha='right')
+
+plt.title('Time Series Heatmap of Sales (Aggregated by Month)')
+plt.xlabel('Month and Year')
+
+
+plt.show()
+
+  import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+#load DATA
+df = pd.read_csv("/kaggle/input/dataco-smart-supply-chain-for-big-data-analysis/DataCoSupplyChainDataset.csv", encoding="ISO-8859-1")
+  # Data Cleaning
+df.dropna(inplace=True)  # Drop rows with missing values
+
+# Feature Engineering
+df['Order Date'] = pd.to_datetime(df['order date (DateOrders)'])
+df['Year'] = df['Order Date'].dt.year
+df['Month'] = df['Order Date'].dt.month
+# Aggregate data to monthly level
+monthly_data = df.groupby(['Year', 'Month']).agg({
+    'Sales': 'sum',
+    'Order Item Quantity': 'sum'
+}).reset_index()
+
+# Rename columns for clarity
+monthly_data.rename(columns={'Sales': 'Total Sales', 'Order Item Quantity': 'Total Quantity'}, inplace=True)
+
+# Define the target variable and features
+X = monthly_data[['Year', 'Month']]
+y = monthly_data['Total Quantity']
+
+  import pandas as pd
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder, StandardScaler
+
+# Sample data dictionary (a subset of your data for demonstration)
+data = {
+    'Type': ['DEBIT', 'TRANSFER', 'CASH', 'DEBIT', 'PAYMENT', 'TRANSFER', 'DEBIT', 'TRANSFER', 'CASH', 'CASH'],
+    'Days for shipping (real)': [3, 5, 4, 3, 2, 6, 2, 2, 3, 2],
+    'Days for shipment (scheduled)': [4, 4, 4, 4, 4, 4, 1, 1, 2, 1],
+    'Benefit per order': [91.25, -249.08, -247.77, 22.86, 134.21, 18.58, 95.18, 68.43, 133.72, 132.14],
+    'Sales per customer': [314.64, 311.36, 309.72, 304.81, 298.25, 294.98, 288.42, 285.14, 278.59, 275.31],
+    'Delivery Status': ['Advance shipping', 'Late delivery', 'Shipping on time', 'Advance shipping', 'Advance shipping', 'Shipping canceled', 'Late delivery', 'Late delivery', 'Late delivery', 'Late delivery'],
+    'Late_delivery_risk': [0, 1, 0, 0, 0, 0, 1, 1, 1, 1],
+    'Category Id': [73, 73, 73, 73, 73, 73, 73, 73, 73, 73],
+    'Category Name': ['Sporting Goods']*10,
+    'Customer City': ['Caguas', 'Caguas', 'San Jose', 'Los Angeles', 'Caguas', 'Tonawanda', 'Caguas', 'Miami', 'Caguas', 'San Ramon'],
+    'Customer Country': ['Puerto Rico', 'Puerto Rico', 'EE. UU.', 'EE. UU.', 'Puerto Rico', 'EE. UU.', 'Puerto Rico', 'EE. UU.', 'Puerto Rico', 'EE. UU.'],
+    # Add other columns as needed
+    'Order Status': ['COMPLETE', 'PENDING', 'CLOSED', 'COMPLETE', 'PENDING_PAYMENT', 'CANCELED', 'COMPLETE', 'PROCESSING', 'CLOSED', 'CLOSED']
+}
+
+# Convert dictionary to DataFrame
+df = pd.DataFrame(data)
+
+# Encode categorical variables
+categorical_columns = ['Type', 'Delivery Status', 'Category Name', 'Customer City', 'Customer Country', 'Order Status']
+
+# Use one-hot encoding for categorical variables
+df_encoded = pd.get_dummies(df, columns=categorical_columns)
+
+# Print the encoded DataFrame
+print(df_encoded.head())
+
+# If you have a specific target variable for classification (e.g., Late_delivery_risk)
+X = df_encoded.drop('Late_delivery_risk', axis=1)
+y = df_encoded['Late_delivery_risk']
+
+# Ensure all features are numeric and scale them if necessary
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# Now you have X_scaled as your feature set and y as your target variable for classification
+
+  #MODELING
+  import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+import xgboost as xgb
+from sklearn.metrics import mean_squared_error, r2_score
+
+# Load the dataset
+df = pd.read_csv("/kaggle/input/dataco-smart-supply-chain-for-big-data-analysis/DataCoSupplyChainDataset.csv", encoding="ISO-8859-1")
+
+# Display the first 5 rows
+print(df.head(5))
+
+# Dropping unnecessary columns
+columns_to_drop = ['Order Zipcode', 'Product Description', 'Product Image', 'Product Name', 'shipping date (DateOrders)']
+df = df.drop(columns=columns_to_drop)
+
+# Handle missing values
+df = df.dropna()
+
+# Encode categorical features
+label_encoders = {}
+for column in df.select_dtypes(include=['object']).columns:
+    label_encoders[column] = LabelEncoder()
+    df[column] = label_encoders[column].fit_transform(df[column])
+
+# Define features and target
+X = df.drop(['Benefit per order'], axis=1)
+y = df['Benefit per order']
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=52)
+
+# Scale the features
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# Linear Regression model
+lr_model = LinearRegression()
+lr_model.fit(X_train_scaled, y_train)
+lr_pred = lr_model.predict(X_test_scaled)
+
+# Random Forest Regressor model
+rf_model = RandomForestRegressor(n_estimators=100, random_state=52)
+rf_model.fit(X_train, y_train)
+rf_pred = rf_model.predict(X_test)
+
+# XGBoost Regressor model
+xgb_model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=100, random_state=52)
+xgb_model.fit(X_train, y_train)
+xgb_pred = xgb_model.predict(X_test)
+
+# Evaluate models
+def evaluate_model(y_test, y_pred, model_name):
+    mse = mean_squared_error(y_test, y_pred)
+    rmse = np.sqrt(mse)
+    r2 = r2_score(y_test, y_pred)
+    print(f'{model_name} Performance:')
+    print(f'Mean Squared Error: {mse}')
+    print(f'Root Mean Squared Error: {rmse}')
+    print(f'R2 Score: {r2}\n')
+
+evaluate_model(y_test, lr_pred, 'Linear Regression')
+evaluate_model(y_test, rf_pred, 'Random Forest Regressor')
+evaluate_model(y_test, xgb_pred, 'XGBoost Regressor')
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Extract feature importances from Random Forest
+rf_importances = rf_model.feature_importances_
+rf_feature_importance = pd.DataFrame({'Feature': X.columns, 'Importance': rf_importances})
+rf_feature_importance = rf_feature_importance.sort_values(by='Importance', ascending=False).head(9)
+
+# Extract feature importances from XGBoost
+xgb_importances = xgb_model.feature_importances_
+xgb_feature_importance = pd.DataFrame({'Feature': X.columns, 'Importance': xgb_importances})
+xgb_feature_importance = xgb_feature_importance.sort_values(by='Importance', ascending=False).head(9)
+
+# Plot the feature importances
+plt.figure(figsize=(14, 6))
+
+
+
+# XGBoost
+plt.subplot(1, 2, 2)
+sns.barplot(x='Importance', y='Feature', data=xgb_feature_importance, palette='viridis')
+plt.title('Top 9 Feature Importances')
+plt.xlabel('Importance')
+plt.ylabel('Feature')
+
+plt.tight_layout()
+plt.show()
+
+
+  
